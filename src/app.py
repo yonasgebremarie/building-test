@@ -1027,13 +1027,15 @@ def server(input, output, session):
             feature["properties"]["permit_count"] = count
 
         def feature_style(feature):
+            area_name = feature["properties"].get("name")
             count = int(feature["properties"].get("permit_count", 0))
+            is_selected = active_area != "All" and area_name == active_area
             return {
-                "color": "#4B5563",
-                "weight": 1.2,
-                "dashArray": "6 4",
+                "color": "#7C3AED" if is_selected else "#4B5563",
+                "weight": 3.2 if is_selected else 1.2,
+                "dashArray": None if is_selected else "6 4",
                 "fillColor": heat_fill_color(count, max_count),
-                "fillOpacity": 0.72 if count > 0 else 0.28,
+                "fillOpacity": 0.82 if is_selected else (0.72 if count > 0 else 0.28),
             }
 
         geo_layer = ipyleaflet.GeoJSON(
@@ -1048,36 +1050,6 @@ def server(input, output, session):
         )
         m.add(geo_layer)
 
-        selected_layer = None
-        # Strong, persistent border highlight for selected neighbourhood.
-        if active_area != "All":
-            selected_feature = next(
-                (
-                    feature for feature in geojson_data["features"]
-                    if feature["properties"]["name"] == active_area
-                ),
-                None,
-            )
-            if selected_feature is not None:
-                selected_layer = ipyleaflet.GeoJSON(
-                    data={"type": "FeatureCollection", "features": [selected_feature]},
-                    style={
-                        "color": "#7C3AED",
-                        "weight": 4,
-                        "dashArray": "10 4",
-                        "dashOffset": "0",
-                        "fillOpacity": 0,
-                    },
-                    hover_style={
-                        "color": "#6D28D9",
-                        "weight": 4,
-                        "dashArray": "10 4",
-                        "dashOffset": "0",
-                        "fillOpacity": 0.06,
-                    },
-                )
-                m.add(selected_layer)
-
         def select_area_from_map(**kwargs):
             props = kwargs.get("properties") or {}
             area_name = props.get("name")
@@ -1086,8 +1058,6 @@ def server(input, output, session):
 
         if hasattr(geo_layer, "on_click"):
             geo_layer.on_click(select_area_from_map)
-        if selected_layer is not None and hasattr(selected_layer, "on_click"):
-            selected_layer.on_click(select_area_from_map)
 
         return m
 
