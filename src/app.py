@@ -34,13 +34,20 @@ with open('data/raw/local-area-boundary.geojson', encoding='utf-8') as f:
 permits_df[ISSUE_DATE] = pd.to_datetime(permits_df[ISSUE_DATE])
 permits_df[PERMIT_TYPE] = permits_df[PERMIT_TYPE].astype(str).str.strip()
 
-# create the GitHub chat client using the GITHUB_TOKEN in .env
-chat_client = clt.ChatGithub(
-    api_key=os.environ["GITHUB_TOKEN"],
-    model="gpt-4.1-mini"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+AI_CHAT_ENABLED = bool(GITHUB_TOKEN)
+AI_CHAT_DISABLED_MESSAGE = (
+    "AI helper is unavailable because GITHUB_TOKEN is not set. "
+    "Add it to your .env file to enable chat."
 )
 
-query_chat = QueryChat(permits_df, "building_permits", client=chat_client)
+query_chat = None
+if AI_CHAT_ENABLED:
+    chat_client = clt.ChatGithub(
+        api_key=GITHUB_TOKEN,
+        model="gpt-4.1-mini"
+    )
+    query_chat = QueryChat(permits_df, "building_permits", client=chat_client)
 
 # Find the minimum and maximum issue date dynamically from the data
 EARLIEST_ISSUE_DATE = permits_df[ISSUE_DATE].min().date()
@@ -562,16 +569,29 @@ app_ui = ui.page_fluid(
             ui.layout_columns(
                 ui.card(
                     ui.card_header("AI Data Helper Chat"),
-                    query_chat.ui(),
+                    query_chat.ui() if AI_CHAT_ENABLED else ui.div(
+                        AI_CHAT_DISABLED_MESSAGE,
+                        class_="text-muted",
+                        style="padding: 1rem;",
+                    ),
                     full_screen=False,
                     height="70vh",
                 ),
                 ui.card(
                     ui.card_header("Filtered DataFrame"),
-                    ui.output_data_frame("ai_df_preview"),
-                    ui.download_button(
-                        "download_ai_df",
-                        "Download CSV"
+                    (
+                        ui.TagList(
+                            ui.output_data_frame("ai_df_preview"),
+                            ui.download_button(
+                                "download_ai_df",
+                                "Download CSV"
+                            ),
+                        )
+                        if AI_CHAT_ENABLED else ui.div(
+                            "Enable the AI helper to generate and download filtered data.",
+                            class_="text-muted",
+                            style="padding: 1rem;",
+                        )
                     ),
                     full_screen=False,
                     height="70vh",
@@ -602,7 +622,7 @@ def server(input, output, session):
     permits = conn.read_parquet("data/processed/issued-building-permits.parquet")
     session.on_ended(conn.disconnect)
     selected_area = reactive.Value("All")
-    qc_vals = query_chat.server()
+    qc_vals = query_chat.server() if AI_CHAT_ENABLED else None
 
     def get_time_axis(start, end):
         '''
@@ -645,6 +665,8 @@ def server(input, output, session):
 
     @reactive.calc
     def ai_df():
+        if not AI_CHAT_ENABLED:
+            return permits_df.iloc[0:0].copy()
         return qc_vals.df()
 
     @render.download(filename=lambda: f"ai_filtered_permits_{date.today()}.csv")
