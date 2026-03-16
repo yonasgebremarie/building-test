@@ -406,6 +406,10 @@ app_ui = ui.page_fluid(
         .irs--shiny .irs-from, .irs--shiny .irs-to, .irs--shiny .irs-single { background: var(--accent); }
 
         /* Map */
+        .leaflet-interactive:focus {
+          outline: none;
+        }
+
         #neighbourhood_map {
           min-height: 420px;
           display: block;
@@ -1042,6 +1046,13 @@ def server(input, output, session):
                 0.82 if is_sel else (0.72 if count > 0 else 0.28)
             )
 
+        ticks = legend_ticks(max_count)
+        legend_entries = [
+            {"color": heat_fill_color(v, max_count), "label": format_legend_tick(v)}
+            for v in ticks
+        ]
+        legend_entries_str = json.dumps(legend_entries)
+
         geojson_str = json.dumps(geojson_data)
         bounds_str = json.dumps(INITIAL_MAP_BOUNDS)
 
@@ -1057,6 +1068,8 @@ def server(input, output, session):
                 zoomControl: false,
                 scrollWheelZoom: false,
                 doubleClickZoom: false,
+                zoomSnap: 0.25,
+                zoomDelta: 0.25,
             }});
             window._shinyLeafletMap = map;
             L.tileLayer(
@@ -1109,6 +1122,47 @@ def server(input, output, session):
                 }},
             }}).addTo(map);
             map.fitBounds({bounds_str});
+
+            var legendEntries = {legend_entries_str};
+            var legend = L.control({{position: 'bottomright'}});
+            legend.onAdd = function() {{
+                var div = L.DomUtil.create('div');
+                div.style.cssText = [
+                    'background:rgba(255,255,255,0.92)',
+                    'border-radius:8px',
+                    'padding:8px 10px',
+                    'box-shadow:0 1px 5px rgba(0,0,0,0.15)',
+                    'font-family:Inter,-apple-system,sans-serif',
+                    'font-size:11px',
+                    'line-height:1.4',
+                    'min-width:80px',
+                    'pointer-events:none',
+                ].join(';');
+                var title = document.createElement('div');
+                title.textContent = 'Permit Count';
+                title.style.cssText = 'font-weight:700;color:#6C5CE7;margin-bottom:6px;font-size:11px;white-space:nowrap;';
+                div.appendChild(title);
+                var gradientStops = legendEntries.map(function(e, i) {{
+                    return e.color + ' ' + ((i / (legendEntries.length - 1)) * 100).toFixed(1) + '%';
+                }}).join(', ');
+                var body = document.createElement('div');
+                body.style.cssText = 'display:flex;align-items:stretch;gap:5px;';
+                var bar = document.createElement('div');
+                bar.style.cssText = 'width:12px;height:180px;border-radius:4px;flex-shrink:0;background:linear-gradient(to top,' + gradientStops + ');';
+                var labels = document.createElement('div');
+                labels.style.cssText = 'display:flex;flex-direction:column;justify-content:space-between;height:180px;';
+                legendEntries.slice().reverse().forEach(function(entry) {{
+                    var lbl = document.createElement('div');
+                    lbl.textContent = entry.label;
+                    lbl.style.cssText = 'font-size:10px;color:#2D3436;line-height:1;';
+                    labels.appendChild(lbl);
+                }});
+                body.appendChild(bar);
+                body.appendChild(labels);
+                div.appendChild(body);
+                return div;
+            }};
+            legend.addTo(map);
         }})();
         """)
 
