@@ -6,7 +6,6 @@ from shiny import App, reactive, render, ui
 from shinywidgets import output_widget, render_widget, render_altair, reactive_read
 from faicons import icon_svg
 import pandas as pd
-import ipyleaflet
 import altair as alt
 import chatlas as clt
 import os
@@ -164,6 +163,15 @@ app_ui = ui.page_fluid(
     ui.tags.link(
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
         rel="stylesheet",
+    ),
+    ui.tags.link(
+        rel="stylesheet",
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
+        crossorigin="",
+    ),
+    ui.tags.script(
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+        crossorigin="",
     ),
     ui.tags.style(
         """
@@ -551,7 +559,7 @@ app_ui = ui.page_fluid(
                 ui.layout_columns(
             ui.card(
                 ui.card_header("Neighbourhood Permit Map"),
-                output_widget("neighbourhood_map"),
+                ui.output_ui("neighbourhood_map"),
                 full_screen=True,
             ),
             ui.card(
@@ -683,62 +691,6 @@ def server(input, output, session):
             )
 
         return geojson_data, max_count
-
-    def feature_style(feature):
-        props = feature.get("properties", {})
-        count = int(props.get("permit_count", 0))
-        is_selected = bool(props.get("is_selected", False))
-        return {
-            "color": "#7C3AED" if is_selected else "#4B5563",
-            "weight": 3.2 if is_selected else 1.2,
-            "dashArray": None if is_selected else "6 4",
-            "fillColor": heat_fill_color(count, feature_style.max_count),
-            "fillOpacity": 0.82 if is_selected else (0.72 if count > 0 else 0.28),
-        }
-
-    feature_style.max_count = 0
-
-    initial_geojson_data, initial_max_count = build_map_geojson(
-        pd.DataFrame(columns=[AREA, "permit_count"]),
-        "All",
-    )
-    feature_style.max_count = initial_max_count
-
-    neighbourhood_map_widget = ipyleaflet.Map(
-        center=(49.26, -123.12),
-        zoom=12,
-        layout={"height": "420px"},
-        basemap=ipyleaflet.basemaps.CartoDB.Positron,
-        zoom_control=False,
-        zoom_delta=0.5,
-        zoom_snap=0.5,
-        scroll_wheel_zoom=False,
-        touch_zoom=True,
-        double_click_zoom=False,
-    )
-    neighbourhood_map_widget.add(ipyleaflet.ZoomControl(position="bottomleft"))
-    neighbourhood_map_widget.fit_bounds(INITIAL_MAP_BOUNDS)
-
-    neighbourhood_geo_layer = ipyleaflet.GeoJSON(
-        data=initial_geojson_data,
-        style_callback=feature_style,
-        hover_style={
-            "color": "#2563EB",
-            "weight": 2.2,
-            "dashArray": "6 4",
-            "fillOpacity": 0.82,
-        },
-    )
-    neighbourhood_map_widget.add(neighbourhood_geo_layer)
-
-    def select_area_from_map(**kwargs):
-        props = kwargs.get("properties") or {}
-        area_name = props.get("name")
-        if isinstance(area_name, str):
-            apply_area_selection(area_name)
-
-    if hasattr(neighbourhood_geo_layer, "on_click"):
-        neighbourhood_geo_layer.on_click(select_area_from_map)
 
     @reactive.calc
     def ai_df():
@@ -1068,16 +1020,105 @@ def server(input, output, session):
         return grouped
 
     @reactive.effect
-    def _update_neighbourhood_map():
+    def _sync_map_click():
+        area_name = input.map_neighbourhood_click()
+        if isinstance(area_name, str) and area_name in AREA_CHOICES:
+            apply_area_selection(area_name)
+
+    @render.ui
+    def neighbourhood_map():
         df = map_df()
         active_area = selected_area.get()
         geojson_data, max_count = build_map_geojson(df, active_area)
-        feature_style.max_count = max_count
-        neighbourhood_geo_layer.data = geojson_data
 
-    @render_widget
-    def neighbourhood_map():
-        return neighbourhood_map_widget
+        for feature in geojson_data["features"]:
+            count = feature["properties"]["permit_count"]
+            is_sel = feature["properties"]["is_selected"]
+            feature["properties"]["_fill_color"] = heat_fill_color(count, max_count)
+            feature["properties"]["_stroke_color"] = "#7C3AED" if is_sel else "#4B5563"
+            feature["properties"]["_weight"] = 3.2 if is_sel else 1.2
+            feature["properties"]["_dash_array"] = "" if is_sel else "6 4"
+            feature["properties"]["_fill_opacity"] = (
+                0.82 if is_sel else (0.72 if count > 0 else 0.28)
+            )
+
+        geojson_str = json.dumps(geojson_data)
+        bounds_str = json.dumps(INITIAL_MAP_BOUNDS)
+
+        script = ui.HTML(f"""
+        (function() {{
+            var el = document.getElementById('shiny-leaflet-map');
+            if (!el) return;
+            if (window._shinyLeafletMap) {{
+                window._shinyLeafletMap.remove();
+                window._shinyLeafletMap = null;
+            }}
+            var map = L.map('shiny-leaflet-map', {{
+                zoomControl: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+            }});
+            window._shinyLeafletMap = map;
+            L.tileLayer(
+                'https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+                {{
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: 'abcd',
+                    maxZoom: 20,
+                }}
+            ).addTo(map);
+            L.control.zoom({{position: 'bottomleft'}}).addTo(map);
+            var geojsonData = {geojson_str};
+            L.geoJSON(geojsonData, {{
+                style: function(feature) {{
+                    var p = feature.properties;
+                    return {{
+                        fillColor: p._fill_color,
+                        color: p._stroke_color,
+                        weight: p._weight,
+                        dashArray: p._dash_array,
+                        fillOpacity: p._fill_opacity,
+                        opacity: 1,
+                    }};
+                }},
+                onEachFeature: function(feature, layer) {{
+                    var name = feature.properties.name;
+                    var count = feature.properties.permit_count;
+                    layer.bindTooltip('<b>' + name + '</b><br/>Permits: ' + count);
+                    layer.on('mouseover', function(e) {{
+                        e.target.setStyle({{
+                            color: '#2563EB',
+                            weight: 2.2,
+                            dashArray: '6 4',
+                            fillOpacity: 0.82,
+                        }});
+                    }});
+                    layer.on('mouseout', function(e) {{
+                        e.target.setStyle({{
+                            color: feature.properties._stroke_color,
+                            weight: feature.properties._weight,
+                            dashArray: feature.properties._dash_array,
+                            fillOpacity: feature.properties._fill_opacity,
+                        }});
+                    }});
+                    layer.on('click', function() {{
+                        if (window.Shiny) {{
+                            Shiny.setInputValue('map_neighbourhood_click', name, {{priority: 'event'}});
+                        }}
+                    }});
+                }},
+            }}).addTo(map);
+            map.fitBounds({bounds_str});
+        }})();
+        """)
+
+        return ui.tags.div(
+            ui.tags.div(
+                id="shiny-leaflet-map",
+                style="height:420px; border-radius:8px; overflow:hidden;",
+            ),
+            ui.tags.script(script),
+        )
 
 
 app = App(app_ui, server)
