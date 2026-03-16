@@ -1,6 +1,7 @@
 from datetime import date
 import copy
 import json
+from pathlib import Path
 from shiny import App, reactive, render, ui
 from shinywidgets import output_widget, render_widget, render_altair, reactive_read
 from faicons import icon_svg
@@ -15,7 +16,12 @@ from dotenv import load_dotenv
 import ibis 
 from ibis import _ # _ is a shortcut for referencing columns in an ibis table expression without typing table name. ex) permits.filter(_.project_value < 10000) compared to permits.filter(permits.project_value < 10000)
 
-load_dotenv()
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent
+PERMITS_PATH = PROJECT_ROOT / "data" / "processed" / "issued-building-permits.parquet"
+NEIGHBOURHOOD_GEOJSON_PATH = PROJECT_ROOT / "data" / "raw" / "local-area-boundary.geojson"
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 alt.themes.enable("latimes")
 
@@ -25,9 +31,9 @@ APPLIED_DATE = 'PermitNumberCreatedDate'
 AREA = 'GeoLocalArea'
 PERMIT_TYPE = 'TypeOfWork'
 
-permits_df = pd.read_parquet("data/processed/issued-building-permits.parquet")
+permits_df = pd.read_parquet(PERMITS_PATH)
 
-with open('data/raw/local-area-boundary.geojson', encoding='utf-8') as f:
+with open(NEIGHBOURHOOD_GEOJSON_PATH, encoding='utf-8') as f:
     neighbourhood_geojson = json.load(f)
 
 # Standarsize dates and strip whitespace for values we want to filter on
@@ -619,7 +625,7 @@ app_ui = ui.page_fluid(
 def server(input, output, session):
     # connect to the data from the parquet file using ibis/DuckDB
     conn = ibis.duckdb.connect()
-    permits = conn.read_parquet("data/processed/issued-building-permits.parquet")
+    permits = conn.read_parquet(PERMITS_PATH)
     session.on_ended(conn.disconnect)
     selected_area = reactive.Value("All")
     qc_vals = query_chat.server() if AI_CHAT_ENABLED else None
