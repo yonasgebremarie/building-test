@@ -669,6 +669,77 @@ def server(input, output, session):
             selected_area.set(area_name)
             ui.update_selectize("area", selected=area_name)
 
+    def build_map_geojson(df: pd.DataFrame, active_area: str) -> tuple[dict, int]:
+        counts = dict(zip(df[AREA], df["permit_count"])) if not df.empty else {}
+        max_count = int(df["permit_count"].max()) if not df.empty else 0
+
+        geojson_data = copy.deepcopy(neighbourhood_geojson)
+        for feature in geojson_data["features"]:
+            area_name = feature["properties"]["name"]
+            count = int(counts.get(area_name, 0))
+            feature["properties"]["permit_count"] = count
+            feature["properties"]["is_selected"] = (
+                active_area != "All" and area_name == active_area
+            )
+
+        return geojson_data, max_count
+
+    def feature_style(feature):
+        props = feature.get("properties", {})
+        count = int(props.get("permit_count", 0))
+        is_selected = bool(props.get("is_selected", False))
+        return {
+            "color": "#7C3AED" if is_selected else "#4B5563",
+            "weight": 3.2 if is_selected else 1.2,
+            "dashArray": None if is_selected else "6 4",
+            "fillColor": heat_fill_color(count, feature_style.max_count),
+            "fillOpacity": 0.82 if is_selected else (0.72 if count > 0 else 0.28),
+        }
+
+    feature_style.max_count = 0
+
+    initial_geojson_data, initial_max_count = build_map_geojson(
+        pd.DataFrame(columns=[AREA, "permit_count"]),
+        "All",
+    )
+    feature_style.max_count = initial_max_count
+
+    neighbourhood_map_widget = ipyleaflet.Map(
+        center=(49.26, -123.12),
+        zoom=12,
+        layout={"height": "420px"},
+        basemap=ipyleaflet.basemaps.CartoDB.Positron,
+        zoom_control=False,
+        zoom_delta=0.5,
+        zoom_snap=0.5,
+        scroll_wheel_zoom=False,
+        touch_zoom=True,
+        double_click_zoom=False,
+    )
+    neighbourhood_map_widget.add(ipyleaflet.ZoomControl(position="bottomleft"))
+    neighbourhood_map_widget.fit_bounds(INITIAL_MAP_BOUNDS)
+
+    neighbourhood_geo_layer = ipyleaflet.GeoJSON(
+        data=initial_geojson_data,
+        style_callback=feature_style,
+        hover_style={
+            "color": "#2563EB",
+            "weight": 2.2,
+            "dashArray": "6 4",
+            "fillOpacity": 0.82,
+        },
+    )
+    neighbourhood_map_widget.add(neighbourhood_geo_layer)
+
+    def select_area_from_map(**kwargs):
+        props = kwargs.get("properties") or {}
+        area_name = props.get("name")
+        if isinstance(area_name, str):
+            apply_area_selection(area_name)
+
+    if hasattr(neighbourhood_geo_layer, "on_click"):
+        neighbourhood_geo_layer.on_click(select_area_from_map)
+
     @reactive.calc
     def ai_df():
         if not AI_CHAT_ENABLED:
@@ -996,70 +1067,17 @@ def server(input, output, session):
 
         return grouped
 
-    @render_widget
-    def neighbourhood_map():
+    @reactive.effect
+    def _update_neighbourhood_map():
         df = map_df()
         active_area = selected_area.get()
+        geojson_data, max_count = build_map_geojson(df, active_area)
+        feature_style.max_count = max_count
+        neighbourhood_geo_layer.data = geojson_data
 
-        center = (49.26, -123.12)
-        m = ipyleaflet.Map(
-            center=center,
-            zoom=12,
-            layout={'height': '420px'},
-            basemap=ipyleaflet.basemaps.CartoDB.Positron,
-            zoom_control=False,
-            zoom_delta=0.5,
-            zoom_snap=0.5,
-            scroll_wheel_zoom=False,
-            touch_zoom=True,
-            double_click_zoom=False,
-        )
-        m.add(ipyleaflet.ZoomControl(position="bottomleft"))
-        m.fit_bounds(INITIAL_MAP_BOUNDS)
-
-        counts = dict(zip(df[AREA], df["permit_count"])) if not df.empty else {}
-        max_count = int(df["permit_count"].max()) if not df.empty else 0
-
-        geojson_data = copy.deepcopy(neighbourhood_geojson)
-        for feature in geojson_data["features"]:
-            area_name = feature["properties"]["name"]
-            count = int(counts.get(area_name, 0))
-            feature["properties"]["permit_count"] = count
-
-        def feature_style(feature):
-            area_name = feature["properties"].get("name")
-            count = int(feature["properties"].get("permit_count", 0))
-            is_selected = active_area != "All" and area_name == active_area
-            return {
-                "color": "#7C3AED" if is_selected else "#4B5563",
-                "weight": 3.2 if is_selected else 1.2,
-                "dashArray": None if is_selected else "6 4",
-                "fillColor": heat_fill_color(count, max_count),
-                "fillOpacity": 0.82 if is_selected else (0.72 if count > 0 else 0.28),
-            }
-
-        geo_layer = ipyleaflet.GeoJSON(
-            data=geojson_data,
-            style_callback=feature_style,
-            hover_style={
-                "color": "#2563EB",
-                "weight": 2.2,
-                "dashArray": "6 4",
-                "fillOpacity": 0.82,
-            },
-        )
-        m.add(geo_layer)
-
-        def select_area_from_map(**kwargs):
-            props = kwargs.get("properties") or {}
-            area_name = props.get("name")
-            if isinstance(area_name, str):
-                apply_area_selection(area_name)
-
-        if hasattr(geo_layer, "on_click"):
-            geo_layer.on_click(select_area_from_map)
-
-        return m
+    @render_widget
+    def neighbourhood_map():
+        return neighbourhood_map_widget
 
 
 app = App(app_ui, server)
